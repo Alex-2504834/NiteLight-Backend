@@ -8,6 +8,12 @@ from app.core.security import require_user
 router = APIRouter(prefix="/places", tags=["places"])
 
 
+def server_timestamp():
+    from google.cloud import firestore as google_firestore
+
+    return google_firestore.SERVER_TIMESTAMP
+
+
 @router.get("")
 def list_places():
     docs = firestore_db.collection("places").stream()
@@ -19,21 +25,15 @@ def list_places():
         data["id"] = doc.id
         places.append(data)
 
-    return {
-        "places": places,
-    }
+    return {"places": places}
 
 
 @router.get("/{place_id}")
 def get_place(place_id: str):
-    doc_ref = firestore_db.collection("places").document(place_id)
-    doc = doc_ref.get()
+    doc = firestore_db.collection("places").document(place_id).get()
 
     if not doc.exists:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Place not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Place not found")
 
     data = doc.to_dict() or {}
     data["id"] = doc.id
@@ -42,46 +42,38 @@ def get_place(place_id: str):
 
 
 @router.post("")
-def create_place(
-    place: dict[str, Any],
-    user=Depends(require_user),
-):
-    doc_ref = firestore_db.collection("places").document()
+def create_or_update_place(place: dict[str, Any], user=Depends(require_user)):
+    place_id = place.get("id")
 
-    data = {
-        **place,
-        "createdBy": user["uid"],
-    }
+    if place_id:
+        doc_ref = firestore_db.collection("places").document(str(place_id))
+    else:
+        doc_ref = firestore_db.collection("places").document()
 
-    doc_ref.set(data)
+    data = {**place}
+    data.pop("id", None)
+    data["updatedAt"] = server_timestamp()
+    data["updatedBy"] = user["uid"]
 
-    return {
-        "id": doc_ref.id,
-        **data,
-    }
+    if not doc_ref.get().exists:
+        data["createdAt"] = server_timestamp()
+        data["createdBy"] = user["uid"]
+
+    doc_ref.set(data, merge=True)
+
+    return {"id": doc_ref.id, **data}
 
 
 @router.patch("/{place_id}")
-def update_place(
-    place_id: str,
-    updates: dict[str, Any],
-    user=Depends(require_user),
-):
+def update_place(place_id: str, updates: dict[str, Any], user=Depends(require_user)):
     doc_ref = firestore_db.collection("places").document(place_id)
     doc = doc_ref.get()
 
     if not doc.exists:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Place not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Place not found")
 
-    doc_ref.update(
-        {
-            **updates,
-            "updatedBy": user["uid"],
-        }
-    )
+    updates = {**updates, "updatedBy": user["uid"], "updatedAt": server_timestamp()}
+    doc_ref.update(updates)
 
     updated_doc = doc_ref.get()
     data = updated_doc.to_dict() or {}
@@ -91,22 +83,13 @@ def update_place(
 
 
 @router.delete("/{place_id}")
-def delete_place(
-    place_id: str,
-    user=Depends(require_user),
-):
+def delete_place(place_id: str, user=Depends(require_user)):
     doc_ref = firestore_db.collection("places").document(place_id)
     doc = doc_ref.get()
 
     if not doc.exists:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Place not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Place not found")
 
     doc_ref.delete()
 
-    return {
-        "deleted": True,
-        "id": place_id,
-    }
+    return {"deleted": True, "id": place_id}

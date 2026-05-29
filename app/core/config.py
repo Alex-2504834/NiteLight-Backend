@@ -10,12 +10,12 @@ class Settings:
             "FIREBASE_SERVICE_ACCOUNT_JSON",
             "",
         )
-        self.allowed_origins = os.getenv("ALLOWED_ORIGINS", "")
+        self.allowed_origins = os.getenv("ALLOWED_ORIGINS", "*")
 
     @property
     def allowed_origins_list(self) -> list[str]:
         if not self.allowed_origins:
-            return []
+            return ["*"]
 
         return [
             origin.strip()
