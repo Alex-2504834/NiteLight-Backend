@@ -12,6 +12,9 @@ PORT=8000
 HOST=0.0.0.0
 FIREBASE_SERVICE_ACCOUNT_JSON={...one-line service account json...}
 ALLOWED_ORIGINS=*
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_CURRENCY=gbp
+STRIPE_TEST_AMOUNT=100
 ```
 
 ## Endpoints
@@ -32,6 +35,7 @@ Requires Firebase ID token in `Authorization: Bearer <token>`:
 - `POST /places`
 - `PATCH /places/{place_id}`
 - `DELETE /places/{place_id}`
+- `POST /payments/test-payment-sheet`
 
 ## Security note
 

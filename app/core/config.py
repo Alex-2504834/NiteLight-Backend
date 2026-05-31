@@ -11,6 +11,9 @@ class Settings:
             "",
         )
         self.allowed_origins = os.getenv("ALLOWED_ORIGINS", "*")
+        self.stripe_secret_key = os.getenv("STRIPE_SECRET_KEY", "")
+        self.stripe_currency = os.getenv("STRIPE_CURRENCY", "gbp")
+        self.stripe_test_amount = int(os.getenv("STRIPE_TEST_AMOUNT", "100"))
 
     @property
     def allowed_origins_list(self) -> list[str]:
