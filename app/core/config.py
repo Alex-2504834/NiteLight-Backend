@@ -14,6 +14,7 @@ class Settings:
         self.stripe_secret_key = os.getenv("STRIPE_SECRET_KEY", "")
         self.stripe_currency = os.getenv("STRIPE_CURRENCY", "gbp")
         self.stripe_test_amount = int(os.getenv("STRIPE_TEST_AMOUNT", "100"))
+        self.google_places_api_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
 
     @property
     def allowed_origins_list(self) -> list[str]:
