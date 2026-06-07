@@ -4,7 +4,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from app.core.config import settings
 from app.core.firebase import firestore_db
@@ -209,7 +209,8 @@ def list_places():
 
 
 @router.get("/google-details/{google_place_id}")
-def get_google_place_details(google_place_id: str):
+def get_google_place_details(google_place_id: str, response: Response):
+    response.headers["Cache-Control"] = "no-store"
     return fetch_google_place_details(google_place_id)
 
 
