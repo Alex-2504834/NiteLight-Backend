@@ -1,6 +1,6 @@
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 import json
 
@@ -25,6 +25,7 @@ GOOGLE_PLACE_DETAILS_FIELD_MASK = ",".join(
         "userRatingCount",
         "businessStatus",
         "currentOpeningHours",
+        "photos",
     ]
 )
 
@@ -45,9 +46,62 @@ def get_google_error_message(body: Any, fallback_status_code: int) -> str:
     return f"Google Places request failed with status {fallback_status_code}"
 
 
+def normalize_photo_attributions(photo: dict[str, Any]) -> list[str]:
+    author_attributions = photo.get("authorAttributions")
+
+    if not isinstance(author_attributions, list):
+        return []
+
+    labels: list[str] = []
+
+    for attribution in author_attributions:
+        if not isinstance(attribution, dict):
+            continue
+
+        display_name = attribution.get("displayName")
+
+        if isinstance(display_name, str) and display_name.strip():
+            labels.append(display_name.strip())
+
+    return labels
+
+
+def fetch_google_place_photo_uri(photo_name: str | None):
+    if not photo_name or not settings.google_places_api_key:
+        return None
+
+    encoded_photo_name = quote(photo_name, safe="/")
+    query = urlencode(
+        {
+            "key": settings.google_places_api_key,
+            "maxWidthPx": 900,
+            "maxHeightPx": 420,
+            "skipHttpRedirect": "true",
+        }
+    )
+    request = Request(
+        f"https://places.googleapis.com/v1/{encoded_photo_name}/media?{query}",
+        headers={"Accept": "application/json"},
+        method="GET",
+    )
+
+    try:
+        with urlopen(request, timeout=8) as response:
+            response_body = response.read().decode("utf-8")
+            data = json.loads(response_body) if response_body else {}
+            return data.get("photoUri") if isinstance(data.get("photoUri"), str) else None
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
+        return None
+
+
 def normalize_google_place_details(google_place_id: str, data: dict[str, Any]):
     current_opening_hours = data.get("currentOpeningHours")
     display_name = data.get("displayName")
+    photos = data.get("photos")
+    primary_photo = photos[0] if isinstance(photos, list) and photos else None
+    primary_photo_name = (
+        primary_photo.get("name") if isinstance(primary_photo, dict) else None
+    )
 
     return {
         "id": data.get("id") or google_place_id,
@@ -64,10 +118,26 @@ def normalize_google_place_details(google_place_id: str, data: dict[str, Any]):
             if isinstance(current_opening_hours, dict)
             else None
         ),
+        "nextOpenTime": (
+            current_opening_hours.get("nextOpenTime")
+            if isinstance(current_opening_hours, dict)
+            else None
+        ),
+        "nextCloseTime": (
+            current_opening_hours.get("nextCloseTime")
+            if isinstance(current_opening_hours, dict)
+            else None
+        ),
         "weekdayDescriptions": (
             current_opening_hours.get("weekdayDescriptions")
             if isinstance(current_opening_hours, dict)
             else None
+        ),
+        "photoUri": fetch_google_place_photo_uri(primary_photo_name),
+        "photoAttributions": (
+            normalize_photo_attributions(primary_photo)
+            if isinstance(primary_photo, dict)
+            else []
         ),
     }
 
