@@ -247,7 +247,11 @@ def create_or_update_place(place: dict[str, Any], user=Depends(require_user)):
 
     doc_ref.set(data, merge=True)
 
-    return {"id": doc_ref.id, **data}
+    saved_doc = doc_ref.get()
+    saved_data = saved_doc.to_dict() or {}
+    saved_data["id"] = saved_doc.id
+
+    return saved_data
 
 
 @router.patch("/{place_id}")
