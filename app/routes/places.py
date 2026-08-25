@@ -8,7 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status as httpS
 from google.cloud import firestore as googleFirestore
 
 from app.core.config import settings
-from app.core.constants import (googlePhotoMaxHeightPx, googlePhotoMaxWidthPx, googlePlacesBaseUrl, googlePlacesRequestTimeoutSeconds, placesCollectionName)
+from app.core.constants import (
+    googlePhotoMaxHeightPx,
+    googlePhotoMaxWidthPx,
+    googlePlacesBaseUrl,
+    googlePlacesRequestTimeoutSeconds,
+    placesCollectionName,
+)
 from app.core.firebase import firestoreDb
 from app.core.placeValidation import PlaceValidationError, validatePlace
 from app.core.security import requireAdmin
@@ -32,6 +38,7 @@ googlePlaceDetailsFieldMask = ",".join(
     ]
 )
 editablePlaceFields = {
+    "id",
     "name",
     "type",
     "description",
@@ -217,11 +224,23 @@ def fetchGooglePlaceDetails(googlePlaceId: str):
 def buildPlaceDocument(placeData: dict[str, Any], documentId: str) -> dict[str, Any]:
     unknownFields = set(placeData) - editablePlaceFields - auditPlaceFields
     if unknownFields:
-        raise PlaceValidationError(f"Place {documentId} has unknown fields: {', '.join(sorted(unknownFields))}")
+        raise PlaceValidationError(
+            f"Place {documentId} has unknown fields: {', '.join(sorted(unknownFields))}"
+        )
 
-    editableData = {fieldName: fieldValue for fieldName, fieldValue in placeData.items() if fieldName in editablePlaceFields}
-    validatedPlace = validatePlace(editableData, allowId=False)
-    return {"id": documentId, **validatedPlace}
+    editableData = {
+        fieldName: fieldValue
+        for fieldName, fieldValue in placeData.items()
+        if fieldName in editablePlaceFields
+    }
+    validatedPlace = validatePlace(editableData)
+
+    if validatedPlace["id"] != documentId:
+        raise PlaceValidationError(
+            f"Place {documentId} has an id field that does not match its document id"
+        )
+
+    return validatedPlace
 
 
 @router.get("")
@@ -265,9 +284,9 @@ def createOrUpdatePlace(place: dict[str, Any], user=Depends(requireAdmin)):
             detail=str(error),
         ) from error
 
-    placeId = placePayload.pop("id", None)
+    placeId = placePayload["id"]
     placesCollection = firestoreDb.collection(placesCollectionName)
-    placeRef = placesCollection.document(placeId) if placeId else placesCollection.document()
+    placeRef = placesCollection.document(placeId)
     existingSnapshot = placeRef.get()
     serverTimestamp = getServerTimestamp()
     placeData = {
@@ -316,10 +335,9 @@ def updatePlace(
         existingSnapshot.to_dict() or {},
         placeId,
     )
-    currentPlace.pop("id")
 
     try:
-        placePayload = validatePlace({**currentPlace, **updates}, allowId=False)
+        placePayload = validatePlace({**currentPlace, **updates})
     except PlaceValidationError as error:
         raise HTTPException(
             status_code=httpStatus.HTTP_422_UNPROCESSABLE_ENTITY,

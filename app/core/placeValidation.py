@@ -33,6 +33,7 @@ placeFields = {
 }
 
 requiredPlaceFields = {
+    "id",
     "name",
     "type",
     "needsReferral",
@@ -107,12 +108,10 @@ def validateTypes(value: Any) -> list[str]:
     for index, typeValue in enumerate(value):
         validatedType = requireString(typeValue, f"type[{index}]")
         normalizedType = validatedType.lower()
+
         if normalizedType not in seenTypes:
             seenTypes.add(normalizedType)
             validatedTypes.append(validatedType)
-
-    if not validatedTypes:
-        raise PlaceValidationError("type must contain at least one value")
 
     return validatedTypes
 
@@ -120,6 +119,7 @@ def validateTypes(value: Any) -> list[str]:
 def validateSupply(value: Any, index: int) -> dict[str, Any]:
     supply = requireObject(value, f"supplies[{index}]")
     unknownFields = set(supply) - supplyFields
+
     if unknownFields:
         raise PlaceValidationError(
             f"supplies[{index}] has unknown fields: {', '.join(sorted(unknownFields))}"
@@ -137,12 +137,14 @@ def validateSupply(value: Any, index: int) -> dict[str, Any]:
         "availability": availability,
         "inStock": requireBool(supply.get("inStock"), f"supplies[{index}].inStock"),
         "needsReferral": requireBool(
-            supply.get("needsReferral"), f"supplies[{index}].needsReferral"
+            supply.get("needsReferral"),
+            f"supplies[{index}].needsReferral",
         ),
     }
 
     description = optionalString(
-        supply.get("description"), f"supplies[{index}].description"
+        supply.get("description"),
+        f"supplies[{index}].description",
     )
     notes = optionalString(supply.get("notes"), f"supplies[{index}].notes")
 
@@ -157,11 +159,16 @@ def validateSupply(value: Any, index: int) -> dict[str, Any]:
 def validateSupplies(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         raise PlaceValidationError("supplies must be an array")
-    return [validateSupply(supplyValue, index) for index, supplyValue in enumerate(value)]
+
+    return [
+        validateSupply(supplyValue, index)
+        for index, supplyValue in enumerate(value)
+    ]
 
 
 def validateCoord(value: Any) -> dict[str, float]:
     coord = requireObject(value, "coord")
+
     if set(coord) != coordinateFields:
         raise PlaceValidationError("coord must contain only latitude and longitude")
 
@@ -178,6 +185,7 @@ def validateCoord(value: Any) -> dict[str, float]:
 
 def validateOpeningHours(value: Any) -> dict[str, list[dict[str, str]]]:
     openingHours = requireObject(value, "openingHours")
+
     if set(openingHours) != set(dayNames):
         raise PlaceValidationError("openingHours must contain all seven days")
 
@@ -189,18 +197,22 @@ def validateOpeningHours(value: Any) -> dict[str, list[dict[str, str]]]:
             raise PlaceValidationError(f"openingHours.{dayName} must be an array")
 
         validatedOpeningHours[dayName] = []
+
         for index, periodValue in enumerate(periods):
             period = requireObject(periodValue, f"openingHours.{dayName}[{index}]")
+
             if set(period) != openingPeriodFields:
                 raise PlaceValidationError(
                     f"openingHours.{dayName}[{index}] must contain only open and close"
                 )
 
             openTime = requireString(
-                period.get("open"), f"openingHours.{dayName}[{index}].open"
+                period.get("open"),
+                f"openingHours.{dayName}[{index}].open",
             )
             closeTime = requireString(
-                period.get("close"), f"openingHours.{dayName}[{index}].close"
+                period.get("close"),
+                f"openingHours.{dayName}[{index}].close",
             )
 
             if not timePattern.fullmatch(openTime):
@@ -212,15 +224,17 @@ def validateOpeningHours(value: Any) -> dict[str, list[dict[str, str]]]:
                     f"openingHours.{dayName}[{index}].close must use HH:MM"
                 )
 
-            validatedOpeningHours[dayName].append({"open": openTime, "close": closeTime})
+            validatedOpeningHours[dayName].append(
+                {"open": openTime, "close": closeTime}
+            )
 
     return validatedOpeningHours
 
 
-def validatePlace(value: Any, allowId: bool = True) -> dict[str, Any]:
+def validatePlace(value: Any) -> dict[str, Any]:
     place = requireObject(value, "place")
-    allowedFields = placeFields if allowId else placeFields - {"id"}
-    unknownFields = set(place) - allowedFields
+    unknownFields = set(place) - placeFields
+
     if unknownFields:
         raise PlaceValidationError(
             f"Unknown place fields: {', '.join(sorted(unknownFields))}"
@@ -233,6 +247,7 @@ def validatePlace(value: Any, allowId: bool = True) -> dict[str, Any]:
         )
 
     validatedPlace: dict[str, Any] = {
+        "id": requireString(place.get("id"), "id"),
         "name": requireString(place.get("name"), "name"),
         "type": validateTypes(place.get("type")),
         "needsReferral": requireBool(place.get("needsReferral"), "needsReferral"),
@@ -240,9 +255,6 @@ def validatePlace(value: Any, allowId: bool = True) -> dict[str, Any]:
         "coord": validateCoord(place.get("coord")),
         "openingHours": validateOpeningHours(place.get("openingHours")),
     }
-
-    if allowId and "id" in place:
-        validatedPlace["id"] = requireString(place.get("id"), "id")
 
     for fieldName in optionalPlaceTextFields:
         textValue = optionalString(place.get(fieldName), fieldName)

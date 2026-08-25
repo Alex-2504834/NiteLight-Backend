@@ -1,5 +1,6 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
-firebase-admin==6.6.0
-python-dotenv==1.0.1
+firebase-admin==7.5.0
+google-cloud-firestore==2.29.0
+google-api-core==2.34.0
 stripe==15.2.0
