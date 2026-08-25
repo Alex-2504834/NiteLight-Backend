@@ -8,3 +8,6 @@ accountDeletionMaxAuthAgeSeconds = 300
 userLookupLimit = 2
 singleUserLookupLimit = 1
 minimumDisplayNameLength = 2
+
+adminApiKeyHeaderName = "X-Admin-Key"
+adminActorName = "admin"

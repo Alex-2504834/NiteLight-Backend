@@ -5,6 +5,7 @@ def getIntEnvironmentValue(name: str, defaultValue: int) -> int:
     return int(os.getenv(name, str(defaultValue)))
 
 
+
 class Settings:
     def __init__(self):
         self.environment = os.getenv("ENVIRONMENT", "development")
@@ -16,6 +17,7 @@ class Settings:
         self.stripeCurrency = os.getenv("STRIPE_CURRENCY", "gbp")
         self.stripeTestAmount = getIntEnvironmentValue("STRIPE_TEST_AMOUNT", 100)
         self.googlePlacesApiKey = os.getenv("GOOGLE_PLACES_API_KEY", "")
+        self.adminApiKey = os.getenv("ADMIN_API_KEY", "")
 
     @property
     def allowedOriginsList(self) -> list[str]:

@@ -17,7 +17,7 @@ from app.core.constants import (
 )
 from app.core.firebase import firestoreDb
 from app.core.placeValidation import PlaceValidationError, validatePlace
-from app.core.security import requireAdmin
+from app.core.security import requireAdmin, requireUser
 
 
 router = APIRouter(prefix="/places", tags=["places"])
@@ -275,7 +275,7 @@ def getPlace(placeId: str):
 
 
 @router.post("")
-def createOrUpdatePlace(place: dict[str, Any], user=Depends(requireAdmin)):
+def createOrUpdatePlace(place: dict[str, Any], user=Depends(requireUser)):
     try:
         placePayload = validatePlace(place)
     except PlaceValidationError as error:

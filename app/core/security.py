@@ -1,10 +1,12 @@
+import secrets
 from typing import Any
 
-from fastapi import Depends, HTTPException, status as httpStatus
+from fastapi import Depends, Header, HTTPException, status as httpStatus
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.constants import usersCollectionName
-from app.core.firebase import firebaseAuth, firestoreDb
+from app.core.config import settings
+from app.core.constants import adminActorName, adminApiKeyHeaderName
+from app.core.firebase import firebaseAuth
 
 
 bearerScheme = HTTPBearer(auto_error=False)
@@ -38,26 +40,21 @@ def requireUser(
     }
 
 
-def requireAdmin(user: dict[str, Any] = Depends(requireUser)) -> dict[str, Any]:
-    uid = user.get("uid")
-    if not uid:
+def requireAdmin(
+    adminApiKey: str | None = Header(default=None, alias=adminApiKeyHeaderName),
+) -> dict[str, str]:
+    configuredAdminApiKey = settings.adminApiKey
+
+    if not configuredAdminApiKey:
+        raise HTTPException(
+            status_code=httpStatus.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Admin API key is not configured",
+        )
+
+    if not adminApiKey or not secrets.compare_digest(adminApiKey, configuredAdminApiKey):
         raise HTTPException(
             status_code=httpStatus.HTTP_401_UNAUTHORIZED,
-            detail="Invalid user",
+            detail="Invalid admin API key",
         )
 
-    profileSnapshot = firestoreDb.collection(usersCollectionName).document(uid).get()
-    if not profileSnapshot.exists:
-        raise HTTPException(
-            status_code=httpStatus.HTTP_403_FORBIDDEN,
-            detail="Admin access required",
-        )
-
-    profileData = profileSnapshot.to_dict() or {}
-    if profileData.get("isAdmin") is not True:
-        raise HTTPException(
-            status_code=httpStatus.HTTP_403_FORBIDDEN,
-            detail="Admin access required",
-        )
-
-    return {**user, "profile": profileData}
+    return {"uid": adminActorName}
