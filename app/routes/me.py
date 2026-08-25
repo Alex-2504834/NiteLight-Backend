@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends
 
-from app.core.security import require_user
+from app.core.security import requireUser
+
 
 router = APIRouter()
 
 
 @router.get("/me")
-def get_me(user=Depends(require_user)):
+def getMe(user=Depends(requireUser)):
     return user

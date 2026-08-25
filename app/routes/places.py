@@ -1,18 +1,21 @@
+import json
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
-import json
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status as httpStatus
+from google.cloud import firestore as googleFirestore
 
 from app.core.config import settings
-from app.core.firebase import firestore_db
-from app.core.security import require_user
+from app.core.constants import (googlePhotoMaxHeightPx, googlePhotoMaxWidthPx, googlePlacesBaseUrl, googlePlacesRequestTimeoutSeconds, placesCollectionName)
+from app.core.firebase import firestoreDb
+from app.core.placeValidation import PlaceValidationError, validatePlace
+from app.core.security import requireAdmin
+
 
 router = APIRouter(prefix="/places", tags=["places"])
-
-GOOGLE_PLACE_DETAILS_FIELD_MASK = ",".join(
+googlePlaceDetailsFieldMask = ",".join(
     [
         "id",
         "displayName",
@@ -28,258 +31,326 @@ GOOGLE_PLACE_DETAILS_FIELD_MASK = ",".join(
         "photos",
     ]
 )
+editablePlaceFields = {
+    "name",
+    "type",
+    "description",
+    "needsReferral",
+    "supplies",
+    "placeId",
+    "address",
+    "coord",
+    "openingHours",
+}
+auditPlaceFields = {"createdAt", "createdBy", "updatedAt", "updatedBy"}
+jsonAcceptHeader = {"Accept": "application/json"}
+noStoreCacheValue = "no-store"
 
 
-def server_timestamp():
-    from google.cloud import firestore as google_firestore
-
-    return google_firestore.SERVER_TIMESTAMP
+def getServerTimestamp():
+    return googleFirestore.SERVER_TIMESTAMP
 
 
-def get_google_error_message(body: Any, fallback_status_code: int) -> str:
-    if isinstance(body, dict):
-        error = body.get("error")
+def getGoogleErrorMessage(responseBody: Any, fallbackStatusCode: int) -> str:
+    if isinstance(responseBody, dict):
+        errorData = responseBody.get("error")
 
-        if isinstance(error, dict) and isinstance(error.get("message"), str):
-            return error["message"]
+        if isinstance(errorData, dict) and isinstance(errorData.get("message"), str):
+            return errorData["message"]
 
-    return f"Google Places request failed with status {fallback_status_code}"
+    return f"Google Places request failed with status {fallbackStatusCode}"
 
 
-def normalize_photo_attributions(photo: dict[str, Any]) -> list[str]:
-    author_attributions = photo.get("authorAttributions")
+def normalizePhotoAttributions(photo: dict[str, Any]) -> list[str]:
+    authorAttributions = photo.get("authorAttributions")
 
-    if not isinstance(author_attributions, list):
+    if not isinstance(authorAttributions, list):
         return []
 
-    labels: list[str] = []
+    attributionLabels: list[str] = []
 
-    for attribution in author_attributions:
+    for attribution in authorAttributions:
         if not isinstance(attribution, dict):
             continue
 
-        display_name = attribution.get("displayName")
+        displayName = attribution.get("displayName")
 
-        if isinstance(display_name, str) and display_name.strip():
-            labels.append(display_name.strip())
+        if isinstance(displayName, str) and displayName.strip():
+            attributionLabels.append(displayName.strip())
 
-    return labels
+    return attributionLabels
 
 
-def fetch_google_place_photo_uri(photo_name: str | None):
-    if not photo_name or not settings.google_places_api_key:
+def fetchGooglePlacePhotoUri(photoName: str | None):
+    if not photoName or not settings.googlePlacesApiKey:
         return None
 
-    encoded_photo_name = quote(photo_name, safe="/")
-    query = urlencode(
+    encodedPhotoName = quote(photoName, safe="/")
+    queryString = urlencode(
         {
-            "key": settings.google_places_api_key,
-            "maxWidthPx": 900,
-            "maxHeightPx": 420,
+            "key": settings.googlePlacesApiKey,
+            "maxWidthPx": googlePhotoMaxWidthPx,
+            "maxHeightPx": googlePhotoMaxHeightPx,
             "skipHttpRedirect": "true",
         }
     )
     request = Request(
-        f"https://places.googleapis.com/v1/{encoded_photo_name}/media?{query}",
-        headers={"Accept": "application/json"},
+        f"{googlePlacesBaseUrl}/{encodedPhotoName}/media?{queryString}",
+        headers=jsonAcceptHeader,
         method="GET",
     )
 
     try:
-        with urlopen(request, timeout=8) as response:
-            response_body = response.read().decode("utf-8")
-            data = json.loads(response_body) if response_body else {}
-            return data.get("photoUri") if isinstance(data.get("photoUri"), str) else None
+        with urlopen(request, timeout=googlePlacesRequestTimeoutSeconds) as response:
+            responseBody = response.read().decode("utf-8")
+            responseData = json.loads(responseBody) if responseBody else {}
+            photoUri = responseData.get("photoUri")
+            return photoUri if isinstance(photoUri, str) else None
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
         return None
 
 
-def normalize_google_place_details(google_place_id: str, data: dict[str, Any]):
-    current_opening_hours = data.get("currentOpeningHours")
-    display_name = data.get("displayName")
-    photos = data.get("photos")
-    primary_photo = photos[0] if isinstance(photos, list) and photos else None
-    primary_photo_name = (
-        primary_photo.get("name") if isinstance(primary_photo, dict) else None
+def normalizeGooglePlaceDetails(
+    googlePlaceId: str,
+    responseData: dict[str, Any],
+):
+    currentOpeningHours = responseData.get("currentOpeningHours")
+    displayName = responseData.get("displayName")
+    photos = responseData.get("photos")
+    primaryPhoto = photos[0] if isinstance(photos, list) and photos else None
+    primaryPhotoName = (
+        primaryPhoto.get("name") if isinstance(primaryPhoto, dict) else None
     )
 
     return {
-        "id": data.get("id") or google_place_id,
-        "name": display_name.get("text") if isinstance(display_name, dict) else None,
-        "formattedAddress": data.get("formattedAddress"),
-        "phoneNumber": data.get("nationalPhoneNumber") or data.get("internationalPhoneNumber"),
-        "websiteUri": data.get("websiteUri"),
-        "googleMapsUri": data.get("googleMapsUri"),
-        "rating": data.get("rating"),
-        "userRatingCount": data.get("userRatingCount"),
-        "businessStatus": data.get("businessStatus"),
+        "id": responseData.get("id") or googlePlaceId,
+        "name": displayName.get("text") if isinstance(displayName, dict) else None,
+        "formattedAddress": responseData.get("formattedAddress"),
+        "phoneNumber": responseData.get("nationalPhoneNumber")
+        or responseData.get("internationalPhoneNumber"),
+        "websiteUri": responseData.get("websiteUri"),
+        "googleMapsUri": responseData.get("googleMapsUri"),
+        "rating": responseData.get("rating"),
+        "userRatingCount": responseData.get("userRatingCount"),
+        "businessStatus": responseData.get("businessStatus"),
         "openNow": (
-            current_opening_hours.get("openNow")
-            if isinstance(current_opening_hours, dict)
+            currentOpeningHours.get("openNow")
+            if isinstance(currentOpeningHours, dict)
             else None
         ),
         "nextOpenTime": (
-            current_opening_hours.get("nextOpenTime")
-            if isinstance(current_opening_hours, dict)
+            currentOpeningHours.get("nextOpenTime")
+            if isinstance(currentOpeningHours, dict)
             else None
         ),
         "nextCloseTime": (
-            current_opening_hours.get("nextCloseTime")
-            if isinstance(current_opening_hours, dict)
+            currentOpeningHours.get("nextCloseTime")
+            if isinstance(currentOpeningHours, dict)
             else None
         ),
         "weekdayDescriptions": (
-            current_opening_hours.get("weekdayDescriptions")
-            if isinstance(current_opening_hours, dict)
+            currentOpeningHours.get("weekdayDescriptions")
+            if isinstance(currentOpeningHours, dict)
             else None
         ),
-        "photoUri": fetch_google_place_photo_uri(primary_photo_name),
+        "photoUri": fetchGooglePlacePhotoUri(primaryPhotoName),
         "photoAttributions": (
-            normalize_photo_attributions(primary_photo)
-            if isinstance(primary_photo, dict)
+            normalizePhotoAttributions(primaryPhoto)
+            if isinstance(primaryPhoto, dict)
             else []
         ),
     }
 
 
-def fetch_google_place_details(google_place_id: str):
-    if not settings.google_places_api_key:
+def fetchGooglePlaceDetails(googlePlaceId: str):
+    if not settings.googlePlacesApiKey:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=httpStatus.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Google Places API key is not configured on the backend.",
         )
 
-    encoded_google_place_id = quote(google_place_id, safe="")
+    encodedGooglePlaceId = quote(googlePlaceId, safe="")
     request = Request(
-        f"https://places.googleapis.com/v1/places/{encoded_google_place_id}",
+        f"{googlePlacesBaseUrl}/places/{encodedGooglePlaceId}",
         headers={
             "Accept": "application/json",
-            "X-Goog-Api-Key": settings.google_places_api_key,
-            "X-Goog-FieldMask": GOOGLE_PLACE_DETAILS_FIELD_MASK,
+            "X-Goog-Api-Key": settings.googlePlacesApiKey,
+            "X-Goog-FieldMask": googlePlaceDetailsFieldMask,
         },
         method="GET",
     )
 
     try:
-        with urlopen(request, timeout=8) as response:
-            response_body = response.read().decode("utf-8")
-            data = json.loads(response_body) if response_body else {}
-            return normalize_google_place_details(google_place_id, data)
+        with urlopen(request, timeout=googlePlacesRequestTimeoutSeconds) as response:
+            responseBody = response.read().decode("utf-8")
+            responseData = json.loads(responseBody) if responseBody else {}
+            return normalizeGooglePlaceDetails(googlePlaceId, responseData)
     except HTTPError as error:
-        response_body = error.read().decode("utf-8")
+        responseBody = error.read().decode("utf-8")
 
         try:
-            data = json.loads(response_body) if response_body else {}
+            responseData = json.loads(responseBody) if responseBody else {}
         except json.JSONDecodeError:
-            data = {}
+            responseData = {}
 
         raise HTTPException(
             status_code=error.code,
-            detail=get_google_error_message(data, error.code),
+            detail=getGoogleErrorMessage(responseData, error.code),
         ) from error
     except URLError as error:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=httpStatus.HTTP_502_BAD_GATEWAY,
             detail="Could not reach Google Places.",
         ) from error
     except TimeoutError as error:
         raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            status_code=httpStatus.HTTP_504_GATEWAY_TIMEOUT,
             detail="Google Places request timed out.",
         ) from error
     except json.JSONDecodeError as error:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=httpStatus.HTTP_502_BAD_GATEWAY,
             detail="Google Places returned an invalid response.",
         ) from error
 
 
-@router.get("")
-def list_places():
-    docs = firestore_db.collection("places").stream()
+def buildPlaceDocument(placeData: dict[str, Any], documentId: str) -> dict[str, Any]:
+    unknownFields = set(placeData) - editablePlaceFields - auditPlaceFields
+    if unknownFields:
+        raise PlaceValidationError(f"Place {documentId} has unknown fields: {', '.join(sorted(unknownFields))}")
 
+    editableData = {fieldName: fieldValue for fieldName, fieldValue in placeData.items() if fieldName in editablePlaceFields}
+    validatedPlace = validatePlace(editableData, allowId=False)
+    return {"id": documentId, **validatedPlace}
+
+
+@router.get("")
+def listPlaces():
+    placeSnapshots = firestoreDb.collection(placesCollectionName).stream()
     places: list[dict[str, Any]] = []
 
-    for doc in docs:
-        data = doc.to_dict() or {}
-        data["id"] = doc.id
-        places.append(data)
+    for placeSnapshot in placeSnapshots:
+        placeData = buildPlaceDocument(placeSnapshot.to_dict() or {}, placeSnapshot.id)
+        places.append(placeData)
 
     return {"places": places}
 
 
-@router.get("/google-details/{google_place_id}")
-def get_google_place_details(google_place_id: str, response: Response):
-    response.headers["Cache-Control"] = "no-store"
-    return fetch_google_place_details(google_place_id)
+@router.get("/google-details/{googlePlaceId}")
+def getGooglePlaceDetails(googlePlaceId: str, response: Response):
+    response.headers["Cache-Control"] = noStoreCacheValue
+    return fetchGooglePlaceDetails(googlePlaceId)
 
 
-@router.get("/{place_id}")
-def get_place(place_id: str):
-    doc = firestore_db.collection("places").document(place_id).get()
+@router.get("/{placeId}")
+def getPlace(placeId: str):
+    placeSnapshot = firestoreDb.collection(placesCollectionName).document(placeId).get()
 
-    if not doc.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Place not found")
+    if not placeSnapshot.exists:
+        raise HTTPException(
+            status_code=httpStatus.HTTP_404_NOT_FOUND,
+            detail="Place not found",
+        )
 
-    data = doc.to_dict() or {}
-    data["id"] = doc.id
-
-    return data
+    return buildPlaceDocument(placeSnapshot.to_dict() or {}, placeSnapshot.id)
 
 
 @router.post("")
-def create_or_update_place(place: dict[str, Any], user=Depends(require_user)):
-    place_id = place.get("id")
+def createOrUpdatePlace(place: dict[str, Any], user=Depends(requireAdmin)):
+    try:
+        placePayload = validatePlace(place)
+    except PlaceValidationError as error:
+        raise HTTPException(
+            status_code=httpStatus.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(error),
+        ) from error
 
-    if place_id:
-        doc_ref = firestore_db.collection("places").document(str(place_id))
+    placeId = placePayload.pop("id", None)
+    placesCollection = firestoreDb.collection(placesCollectionName)
+    placeRef = placesCollection.document(placeId) if placeId else placesCollection.document()
+    existingSnapshot = placeRef.get()
+    serverTimestamp = getServerTimestamp()
+    placeData = {
+        **placePayload,
+        "updatedAt": serverTimestamp,
+        "updatedBy": user["uid"],
+    }
+
+    if existingSnapshot.exists:
+        existingData = existingSnapshot.to_dict() or {}
+        if "createdAt" in existingData:
+            placeData["createdAt"] = existingData["createdAt"]
+        if "createdBy" in existingData:
+            placeData["createdBy"] = existingData["createdBy"]
     else:
-        doc_ref = firestore_db.collection("places").document()
+        placeData["createdAt"] = serverTimestamp
+        placeData["createdBy"] = user["uid"]
 
-    data = {**place}
-    data.pop("id", None)
-    data["updatedAt"] = server_timestamp()
-    data["updatedBy"] = user["uid"]
-
-    if not doc_ref.get().exists:
-        data["createdAt"] = server_timestamp()
-        data["createdBy"] = user["uid"]
-
-    doc_ref.set(data, merge=True)
-
-    saved_doc = doc_ref.get()
-    saved_data = saved_doc.to_dict() or {}
-    saved_data["id"] = saved_doc.id
-
-    return saved_data
+    placeRef.set(placeData)
+    savedSnapshot = placeRef.get()
+    return buildPlaceDocument(savedSnapshot.to_dict() or {}, savedSnapshot.id)
 
 
-@router.patch("/{place_id}")
-def update_place(place_id: str, updates: dict[str, Any], user=Depends(require_user)):
-    doc_ref = firestore_db.collection("places").document(place_id)
-    doc = doc_ref.get()
+@router.patch("/{placeId}")
+def updatePlace(
+    placeId: str,
+    updates: dict[str, Any],
+    user=Depends(requireAdmin),
+):
+    if "id" in updates:
+        raise HTTPException(
+            status_code=httpStatus.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="id cannot be changed",
+        )
 
-    if not doc.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Place not found")
+    placeRef = firestoreDb.collection(placesCollectionName).document(placeId)
+    existingSnapshot = placeRef.get()
 
-    updates = {**updates, "updatedBy": user["uid"], "updatedAt": server_timestamp()}
-    doc_ref.update(updates)
+    if not existingSnapshot.exists:
+        raise HTTPException(
+            status_code=httpStatus.HTTP_404_NOT_FOUND,
+            detail="Place not found",
+        )
 
-    updated_doc = doc_ref.get()
-    data = updated_doc.to_dict() or {}
-    data["id"] = updated_doc.id
+    currentPlace = buildPlaceDocument(
+        existingSnapshot.to_dict() or {},
+        placeId,
+    )
+    currentPlace.pop("id")
 
-    return data
+    try:
+        placePayload = validatePlace({**currentPlace, **updates}, allowId=False)
+    except PlaceValidationError as error:
+        raise HTTPException(
+            status_code=httpStatus.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(error),
+        ) from error
+
+    existingData = existingSnapshot.to_dict() or {}
+    placePayload["updatedBy"] = user["uid"]
+    placePayload["updatedAt"] = getServerTimestamp()
+
+    if "createdAt" in existingData:
+        placePayload["createdAt"] = existingData["createdAt"]
+    if "createdBy" in existingData:
+        placePayload["createdBy"] = existingData["createdBy"]
+
+    placeRef.set(placePayload)
+    updatedSnapshot = placeRef.get()
+    return buildPlaceDocument(updatedSnapshot.to_dict() or {}, updatedSnapshot.id)
 
 
-@router.delete("/{place_id}")
-def delete_place(place_id: str, user=Depends(require_user)):
-    doc_ref = firestore_db.collection("places").document(place_id)
-    doc = doc_ref.get()
+@router.delete("/{placeId}")
+def deletePlace(placeId: str, user=Depends(requireAdmin)):
+    placeRef = firestoreDb.collection(placesCollectionName).document(placeId)
+    placeSnapshot = placeRef.get()
 
-    if not doc.exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Place not found")
+    if not placeSnapshot.exists:
+        raise HTTPException(
+            status_code=httpStatus.HTTP_404_NOT_FOUND,
+            detail="Place not found",
+        )
 
-    doc_ref.delete()
+    placeRef.delete()
 
-    return {"deleted": True, "id": place_id}
+    return {"deleted": True, "id": placeId}

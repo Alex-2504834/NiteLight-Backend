@@ -1,29 +1,30 @@
 import os
 
 
+def getIntEnvironmentValue(name: str, defaultValue: int) -> int:
+    return int(os.getenv(name, str(defaultValue)))
+
+
 class Settings:
     def __init__(self):
         self.environment = os.getenv("ENVIRONMENT", "development")
-        self.port = int(os.getenv("PORT", "8000"))
+        self.port = getIntEnvironmentValue("PORT", 8000)
         self.host = os.getenv("HOST", "0.0.0.0")
-        self.firebase_service_account_json = os.getenv(
-            "FIREBASE_SERVICE_ACCOUNT_JSON",
-            "",
-        )
-        self.allowed_origins = os.getenv("ALLOWED_ORIGINS", "*")
-        self.stripe_secret_key = os.getenv("STRIPE_SECRET_KEY", "")
-        self.stripe_currency = os.getenv("STRIPE_CURRENCY", "gbp")
-        self.stripe_test_amount = int(os.getenv("STRIPE_TEST_AMOUNT", "100"))
-        self.google_places_api_key = os.getenv("GOOGLE_PLACES_API_KEY", "")
+        self.firebaseServiceAccountJson = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "")
+        self.allowedOrigins = os.getenv("ALLOWED_ORIGINS", "*")
+        self.stripeSecretKey = os.getenv("STRIPE_SECRET_KEY", "")
+        self.stripeCurrency = os.getenv("STRIPE_CURRENCY", "gbp")
+        self.stripeTestAmount = getIntEnvironmentValue("STRIPE_TEST_AMOUNT", 100)
+        self.googlePlacesApiKey = os.getenv("GOOGLE_PLACES_API_KEY", "")
 
     @property
-    def allowed_origins_list(self) -> list[str]:
-        if not self.allowed_origins:
+    def allowedOriginsList(self) -> list[str]:
+        if not self.allowedOrigins:
             return ["*"]
 
         return [
             origin.strip()
-            for origin in self.allowed_origins.split(",")
+            for origin in self.allowedOrigins.split(",")
             if origin.strip()
         ]
 

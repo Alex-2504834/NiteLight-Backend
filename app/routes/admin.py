@@ -1,14 +1,14 @@
 from fastapi import APIRouter, Depends
 
-from app.core.security import require_admin
+from app.core.security import requireAdmin
+
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 @router.get("/ping")
-async def admin_ping(user=Depends(require_admin)):
+def adminPing(user=Depends(requireAdmin)):
     return {
         "ok": True,
-        "message": "Admin access confirmed",
-        "uid": user.get("uid"),
+        "uid": user["uid"],
     }

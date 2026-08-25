@@ -1,43 +1,44 @@
 from typing import Any
 
 import stripe
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status as httpStatus
 
 from app.core.config import settings
-from app.core.security import require_user
+from app.core.security import requireUser
 
 
 router = APIRouter(prefix="/payments", tags=["payments"])
+paymentPurpose = "mobile_test_payment"
 
 
 @router.post("/test-payment-sheet")
-def create_test_payment_sheet(user: dict[str, Any] = Depends(require_user)):
-    if not settings.stripe_secret_key:
+def createTestPaymentSheet(user: dict[str, Any] = Depends(requireUser)):
+    if not settings.stripeSecretKey:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=httpStatus.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Stripe secret key is not configured",
         )
 
-    stripe.api_key = settings.stripe_secret_key
+    stripe.api_key = settings.stripeSecretKey
 
     try:
-        payment_intent = stripe.PaymentIntent.create(
-            amount=settings.stripe_test_amount,
-            currency=settings.stripe_currency,
+        paymentIntent = stripe.PaymentIntent.create(
+            amount=settings.stripeTestAmount,
+            currency=settings.stripeCurrency,
             automatic_payment_methods={"enabled": True},
             metadata={
                 "firebaseUid": user["uid"] or "",
-                "purpose": "mobile_test_payment",
+                "purpose": paymentPurpose,
             },
         )
-    except Exception as exc:
+    except Exception as error:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=httpStatus.HTTP_502_BAD_GATEWAY,
             detail="Unable to create Stripe payment intent",
-        ) from exc
+        ) from error
 
     return {
-        "paymentIntentClientSecret": payment_intent.client_secret,
-        "amount": settings.stripe_test_amount,
-        "currency": settings.stripe_currency,
+        "paymentIntentClientSecret": paymentIntent.client_secret,
+        "amount": settings.stripeTestAmount,
+        "currency": settings.stripeCurrency,
     }
